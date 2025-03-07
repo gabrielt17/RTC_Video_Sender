@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/home/gabrielt/Documentos/Códigos/RTC_Video_Sender/build",
+  "command": "/usr/bin/clang++ -DRTC_ENABLE_MEDIA=1 -DRTC_ENABLE_WEBSOCKET=1 -g -std=gnu++17 -o CMakeFiles/datachannel-media-sender.dir/main.cpp.o -c /home/gabrielt/Documentos/Códigos/RTC_Video_Sender/main.cpp",
+  "file": "/home/gabrielt/Documentos/Códigos/RTC_Video_Sender/main.cpp",
+  "output": "CMakeFiles/datachannel-media-sender.dir/main.cpp.o"
+}
+]
