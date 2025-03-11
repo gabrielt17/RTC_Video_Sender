@@ -46,9 +46,20 @@ int main() {
         if (state == rtc::PeerConnection::GatheringState::Complete) {
             auto local_offer = pc->localDescription();
             json message = {{"type", local_offer->typeString()},
-                            {"sdp", }
+                            {"sdp", local_offer.value()}
             };
+            std::cout << message << std::endl;
         }
     });
 
+    std::cin.get();
+    // Okay, so now I'm capable of generating my own SDP offer
+    // I want to print the json message out, but it's trapped inside the
+    // lambda function. Let me see how do they print it out in the example.
+    // All I needed to do is print it out inside the lambda function. Okay,
+    // I was stupid for not thinking of that.
+    
+    // It seems as the SDP offer is still not getting generated, cause it
+    // hasn't been printed out yet. There might be another function that
+    // calls it to be generated.
 }
