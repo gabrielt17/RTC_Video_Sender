@@ -1,65 +1,195 @@
-#include <rtc/rtc.hpp> // WebRTC library
-#include <nlohmann/json.hpp> // To interpret json files
-#include <iostream> // To use the std::cout cmd
-#include <thread> // To use receive information from both sockets simutaneosly
-#include <atomic> // Special types built to work in parallel processing
+#include <rtc/rtc.hpp>
+#include <cstddef>
+#include <iostream>
+#include <memory>
+#include <stdexcept>
+#include <thread>
+#include <atomic>
+#include <nlohmann/json.hpp>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <chrono>
+#include <sys/select.h>
+
+typedef int SOCKET;
 
 using nlohmann::json;
 
+const int BUFFER_SIZE = 2048; // Good size to receive ethernet packages
+
+std::atomic<bool> running{true};
+
+void receiveVideo (SOCKET sock, std::shared_ptr<rtc::Track> videoTrack, rtc::SSRC ssrcVideo) {
+    char videoBuffer[BUFFER_SIZE];
+
+    while(running) {
+        int videoLen = recv(sock, videoBuffer, BUFFER_SIZE, 0);
+
+        if (videoLen < sizeof(rtc::RtpHeader) || !(videoTrack->isOpen())) {
+            continue;
+        }
+
+        auto video_rtp = reinterpret_cast<rtc::RtpHeader *>(videoBuffer);
+        video_rtp->setSsrc(ssrcVideo);
+        videoTrack->send(reinterpret_cast<const std::byte *>(videoBuffer), videoLen);
+    }
+
+}
+
+void receiveAudio (SOCKET sock, std::shared_ptr<rtc::Track> audioTrack, rtc::SSRC ssrcAudio) {
+    char audioBuffer[BUFFER_SIZE];
+
+    while(running) {
+        int audioLen = recv(sock, audioBuffer, BUFFER_SIZE, 0);
+
+        if (audioLen < sizeof(rtc::RtpHeader) || !(audioTrack->isOpen())) {
+            continue;
+        }
+
+        auto audio_rtp = reinterpret_cast<rtc::RtpHeader *>(audioBuffer);
+        audio_rtp->setSsrc(ssrcAudio);
+        audioTrack->send(reinterpret_cast<const std::byte *>(audioBuffer), audioLen);
+    }
+}
+
+
+
 int main() {
 
-    // At first, I inicialized the peer connection and started to log the events
-    rtc::InitLogger(rtc::LogLevel::Debug); // Started the logging at debug level
-    auto pc = std::make_shared<rtc::PeerConnection>(); // Pointer to my PeerConnection
-    
+    try {
+        rtc::InitLogger(rtc::LogLevel::Debug); // Started the logging at debug level
+        auto pc = std::make_shared<rtc::PeerConnection>(); // Pointer to my PeerConnection
 
-    // Now I need to start to build the offer
+        pc->onStateChange([](rtc::PeerConnection::State state) {
+            std::cout << "State of the connection: " << state << std::endl;
+        });
 
-    // What command do I need to start gathering the SDP offer?
-    // I remember that the example code uses something called gather state and onLocalDescription
-    // The problem is that I don't really know why they start the local description.
-    // Maybe by starting the peer connection pointer, it already start to gather the SDP offer.
-    // I'll check what the rtc::PeerConnection() constructor usually does.
-    // I'm not really sure, but it seems to be it. There are a lot of members in the file that sugest it
+        pc->onGatheringStateChange([pc](rtc::PeerConnection::GatheringState state) {
+            std::cout << "ICE State: " << state << std::endl;
+        });
 
-    // So I'll do a callback to print out the gathering state.
-    // I have a doubt now. What's the difference between onLocalDescription, onLocalCandidate and onGatheringStateChange?
-    // I'll check the references page.
-    // They're not referenced in there, so I checked the media-sender example
-    // They don't seem to use any of them.
-    // Actually, they use onStateChange first.
+        pc->onStateChange([](rtc::PeerConnection::State state) {
+            std::cout << "PeerConnection state changed to: " << state << std::endl;
+        });
 
-    // Okay, so this block should print out the state of the SDP offer
-    // It seems it's not the SDP offer state, it's actually the ICE state
-    // I was wrong again. It's actually the state of the connection.
-    pc->onStateChange([](rtc::PeerConnection::State state) {
-        std::cout << "State of the connection: " << state << std::endl;
-    });
-    // When it finishes the ICE algorithym, it prints out the state as CLOSED
+        const rtc::SSRC video_ssrc = 43;
+        rtc::Description::Video video("video", rtc::Description::Direction::SendOnly);
+        video.addH264Codec(96);
+        video.addSSRC(video_ssrc, "video-send");
+        auto video_track = pc->addTrack(video);
 
-    // This one prints out the SDP state. If it's all built-up, then it says COMPLETE
-    // I was wrong again. The gathering state is actually the state of the ICE  algorithym
-    // When it's not started, it prints NEW, when it's happening, it prints IN_PROGRESS
-    // When it finished, it prints COMPLETED
-    pc->onGatheringStateChange([pc](rtc::PeerConnection::GatheringState state) {
-        std::cout << "ICE State: " << state << std::endl;
-        if (state == rtc::PeerConnection::GatheringState::Complete) {
-            auto local_offer = pc->localDescription();
-            json message = {{"type", local_offer->typeString()},
-                            {"sdp", local_offer.value()}
-            };
-            std::cout << message << std::endl;
+        const rtc::SSRC audio_ssrc = 44;
+        rtc::Description::Audio audio("audio", rtc::Description::Direction::SendOnly);
+        audio.addOpusCodec(97);
+        audio.addSSRC(audio_ssrc, "audio-send");
+        auto audio_track = pc->addTrack(audio);
+
+        std::cout << "Video track SSRC: " << video_ssrc << std::endl;
+        std::cout << "Audio track SSRC: " << audio_ssrc << std::endl;
+
+        pc->setLocalDescription();
+        auto localOffer = pc->localDescription();
+        json offerJson = {{"type", localOffer->typeString()},
+                            {"sdp", std::string(localOffer.value())}};
+        std::string offerStr = offerJson.dump();
+
+        std::string signalingIP;
+        std::cout << "Insert the signaling server IP: ";
+        std::cin >> signalingIP;
+
+        SOCKET video_socket = socket(AF_INET, SOCK_DGRAM, 0);
+        SOCKET audio_socket = socket(AF_INET, SOCK_DGRAM, 0);
+        SOCKET sdp_socket = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sdp_socket < 0) {
+            throw std::runtime_error("Failed to create client socket");
         }
-    });
 
-    std::cin.get();
-    // Okay, so now I'm capable of generating my own SDP offer
-    // I want to print the json message out, but it's trapped inside the
-    // lambda function. Let me see how do they print it out in the example.
-    // All I needed to do is print it out inside the lambda function. Okay,
-    // I was stupid for not thinking of that.
-    
-    // It seems as the SDP offer is still not getting generated, cause it
-    // hasn't been printed out yet. There might be another function that
-    // calls it to be generated.
+        struct sockaddr_in videoAddr = {};
+        videoAddr.sin_family = AF_INET;
+        videoAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        videoAddr.sin_port = htons(6000);
+        
+        struct sockaddr_in audioAddr = {};
+        audioAddr.sin_family = AF_INET;
+        audioAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        audioAddr.sin_port = htons(6001);
+
+        int VideoRcvBufSize = 512*1024;
+        int AudioRcvBufSize = 128*1024;
+        int sdpRcvBufSize = 65536; // 64 KB (suficiente para SDP)
+        setsockopt(video_socket, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char *>(&VideoRcvBufSize), sizeof(VideoRcvBufSize));
+        setsockopt(audio_socket, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char *>(&AudioRcvBufSize), sizeof(AudioRcvBufSize));
+        setsockopt(sdp_socket, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&sdpRcvBufSize), sizeof(sdpRcvBufSize));
+
+
+        if (bind(video_socket, reinterpret_cast<const sockaddr *>(&videoAddr), sizeof(videoAddr)) < 0) {
+            throw std::runtime_error("Failed to bind the UDP video socket, port 6000");
+        }
+
+        if (bind(audio_socket, reinterpret_cast<const sockaddr *>(&audioAddr), sizeof(audioAddr)) < 0) {
+            throw std::runtime_error("Failed to bind the UDP audio socket, port 6001");
+        }
+
+        struct sockaddr_in sdpAddr = {};
+        sdpAddr.sin_family = AF_INET;
+        sdpAddr.sin_addr.s_addr = inet_addr(signalingIP.c_str());
+        sdpAddr.sin_port = htons(5000);
+
+        struct timeval tv;
+        tv.tv_sec = 10; // Timeout de 10 segundos
+        tv.tv_usec = 0;
+        setsockopt(sdp_socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
+
+        std::cout << "Conecting to server: " << signalingIP << "..." << std::endl;
+        if (connect(sdp_socket, reinterpret_cast<const sockaddr *>(&sdpAddr), sizeof(sdpAddr)) < 0) {
+            throw std::runtime_error("Failed to connect to server.");
+        }
+        std::cout << "Connection established." << std::endl;
+
+        std::cout << "Sending SDP offer..." << std::endl;
+        send(sdp_socket, offerStr.c_str(), offerStr.size(), 0);
+
+        char buffer[BUFFER_SIZE];
+        std::cout << "Waiting an SDP answer..." << std::endl;
+        int bytesReceived = recv(sdp_socket, buffer, BUFFER_SIZE, 0);
+        if (bytesReceived <= 0) {
+            throw std::runtime_error("Failed to receive SDP answer");
+        } else if (bytesReceived >= BUFFER_SIZE) {
+            throw std::runtime_error("SDP answer too large");
+        }
+
+        std::string answerStr(buffer, bytesReceived);
+        json answerJson = json::parse(answerStr);
+        std::cout << "Received SDP answer:\n" << answerJson << std::endl;
+
+        rtc::Description answer(answerJson["sdp"].get<std::string>(), answerJson["type"].get<std::string>());
+        try {
+            pc->setRemoteDescription(answer);
+        } catch (const std::exception& e) {
+            std::cerr << "Failed to set remote description: " << e.what() << std::endl;
+            running = false;
+        }
+
+        std::cout << "WebRTC connection established with success!" << std::endl;
+
+        std::thread videoThread(receiveVideo, video_socket, video_track, video_ssrc);
+        std::thread audioThread(receiveAudio, audio_socket, audio_track, audio_ssrc);
+
+        while (running) {
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        videoThread.join();
+        audioThread.join();
+        close(video_socket);
+        close(audio_socket);
+        close(sdp_socket);
+
+    } catch (const std::exception& e) {
+        running = false;
+        return -1;
+    }
+    return 0;
 }

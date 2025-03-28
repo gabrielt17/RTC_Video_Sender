@@ -1,11 +1,3 @@
 # ninja log v6
-1	2240	1741624438968466641	CMakeFiles/datachannel-media-sender.dir/main.cpp.o	ae05b8cfa6903438
-2240	2353	1741624441207575015	media-sender	29e1b6fe94cdf7d6
-3	2000	1741717857634026314	CMakeFiles/datachannel-media-sender.dir/main.cpp.o	ae05b8cfa6903438
-2000	2108	1741717859631017218	media-sender	29e1b6fe94cdf7d6
-1	1876	1741718159061513208	CMakeFiles/datachannel-media-sender.dir/main.cpp.o	ae05b8cfa6903438
-1876	1962	1741718160936381825	media-sender	29e1b6fe94cdf7d6
-1	2132	1741718218285546201	CMakeFiles/datachannel-media-sender.dir/main.cpp.o	ae05b8cfa6903438
-2132	2221	1741718220416410254	media-sender	29e1b6fe94cdf7d6
-2	2112	1741718312494943103	CMakeFiles/datachannel-media-sender.dir/main.cpp.o	ae05b8cfa6903438
-2112	2217	1741718314604826594	media-sender	29e1b6fe94cdf7d6
+1	3176	1743093818341784957	CMakeFiles/datachannel-media-sender.dir/main.cpp.o	ae05b8cfa6903438
+3176	3322	1743093821516776906	media-sender	29e1b6fe94cdf7d6
